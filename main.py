@@ -77,14 +77,14 @@ def find_nearest_shelters(municipality, street_address):
         if not isinstance(properties, dict):
             continue
         title = properties.get("title", "")
-        if (
-            isinstance(title, str)
-            and title.startswith(address_prefix)
-            and normalized_address
-            in normalize_address_part(title[len(address_prefix) :])
-        ):
-            geocoded_feature = feature
-            break
+        if isinstance(title, str) and title.startswith(address_prefix):
+            candidate_address = normalize_address_part(title[len(address_prefix) :])
+            if candidate_address and (
+                normalized_address in candidate_address
+                or candidate_address in normalized_address
+            ):
+                geocoded_feature = feature
+                break
     if geocoded_feature is None:
         raise AddressNotFoundError
 
@@ -153,7 +153,7 @@ def main(page: ft.Page):
             "municipality_hint": "市町村を選択",
             "street_address_label": "町名・番地",
             "street_address_hint": "例：新桜町7-38",
-            "privacy_note": "入力住所は座標検索のため国土地理院の住所検索サービスに送信されます。",
+            "privacy_note": "入力住所はこのアプリには保存されず、座標検索のため国土地理院の住所検索サービスに送信されます。",
             "search_button": "最寄りの避難所を検索",
             "searching": "検索中…",
             "address_required": "市町村と町名・番地を入力してください。",
@@ -162,7 +162,7 @@ def main(page: ft.Page):
             "shelter_title": "近くの指定避難所",
             "distance_label": "直線距離：約{distance:.1f} km",
             "map_button": "地理院地図で見る",
-            "back_button": "住所入力に戻る",
+            "new_search_button": "別の住所で検索",
             "safety_note": "距離は直線距離です。避難所の開設状況は反映されません。また、公開データに未掲載の施設がある場合があります。災害時は自治体の避難情報と最新の指定状況を確認してください。",
             "source_label": "出典：国土地理院「指定避難所データ」",
         },
@@ -179,7 +179,7 @@ def main(page: ft.Page):
             "municipality_hint": "Select a municipality",
             "street_address_label": "Street address",
             "street_address_hint": "e.g. 7-38 Shinsakuramachi",
-            "privacy_note": "Your address is sent to the Geospatial Information Authority of Japan address search service to find its coordinates.",
+            "privacy_note": "Your address is not saved by this app. It is sent to the Geospatial Information Authority of Japan address search service to find its coordinates.",
             "search_button": "Find nearby shelters",
             "searching": "Searching…",
             "address_required": "Select a municipality and enter a street address.",
@@ -188,7 +188,7 @@ def main(page: ft.Page):
             "shelter_title": "Nearby designated shelters",
             "distance_label": "Straight-line distance: about {distance:.1f} km",
             "map_button": "View on GSI Maps",
-            "back_button": "Back to address",
+            "new_search_button": "Search another address",
             "safety_note": "Distances are straight-line estimates; shelter opening status is not shown. Some facilities may not be included in the public data. During a disaster, check your municipality's evacuation information and current shelter designations.",
             "source_label": 'Source: Geospatial Information Authority of Japan, "Designated Evacuation Shelters"',
         },
@@ -205,7 +205,7 @@ def main(page: ft.Page):
             "municipality_hint": "请选择市町村",
             "street_address_label": "町名、门牌号",
             "street_address_hint": "例如：新樱町7-38",
-            "privacy_note": "为查询坐标，输入的地址会发送至日本国土地理院的地址搜索服务。",
+            "privacy_note": "本应用不会保存您输入的地址；为查询坐标，地址会发送至日本国土地理院的地址搜索服务。",
             "search_button": "查找最近的避难所",
             "searching": "搜索中…",
             "address_required": "请选择市町村并输入町名和门牌号。",
@@ -214,7 +214,7 @@ def main(page: ft.Page):
             "shelter_title": "附近的指定避难所",
             "distance_label": "直线距离：约 {distance:.1f} 公里",
             "map_button": "在国土地理院地图中查看",
-            "back_button": "返回地址输入",
+            "new_search_button": "搜索其他地址",
             "safety_note": "距离为直线距离，未显示避难所开放状态。公开数据可能未收录部分设施。发生灾害时，请确认市町村的避难信息及最新指定情况。",
             "source_label": "来源：日本国土地理院“指定避难所数据”",
         },
@@ -342,7 +342,7 @@ def main(page: ft.Page):
             ],
             ft.Text(tr("safety_note"), size=12, color=MUTED),
             ft.TextButton(content=tr("source_label"), url=GSI_SHELTER_SOURCE),
-            ft.TextButton(content=tr("back_button"), on_click=show_address_form),
+            ft.TextButton(content=tr("new_search_button"), on_click=show_address_form),
         ]
 
     found_shelters = []
@@ -350,12 +350,17 @@ def main(page: ft.Page):
     def show_address_form(_event=None):
         results_section.visible = False
         address_section.visible = True
+        municipality_selector.value = None
+        street_address.value = ""
+        form_error.value = ""
         page.update()
 
     def search_shelters(_event):
         nonlocal found_shelters
         municipality = municipality_selector.value
         address = (street_address.value or "").strip()
+        municipality_selector.value = None
+        street_address.value = ""
         if not municipality or not address:
             form_error.value = tr("address_required")
             page.update()
