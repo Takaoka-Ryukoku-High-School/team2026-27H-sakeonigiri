@@ -2,6 +2,7 @@ import csv
 import io
 import json
 import math
+import re
 import unicodedata
 from datetime import date
 from urllib.error import HTTPError, URLError
@@ -43,6 +44,26 @@ def normalize_address_part(value):
     normalized = unicodedata.normalize("NFKC", value)
     for marker in ("丁目", "番地", "番", "号"):
         normalized = normalized.replace(marker, "")
+    digits = {"〇": "0", "零": "0", "一": "1", "二": "2", "三": "3",
+              "四": "4", "五": "5", "六": "6", "七": "7", "八": "8", "九": "9"}
+
+    def normalize_japanese_number(match):
+        number = match.group()
+        if not any(unit in number for unit in "十百千"):
+            return "".join(digits.get(character, character) for character in number)
+        total = 0
+        section = 0
+        digit = 0
+        for character in number:
+            if character in digits:
+                digit = int(digits[character])
+            else:
+                unit = {"十": 10, "百": 100, "千": 1000}[character]
+                section += (digit or 1) * unit
+                digit = 0
+        return str(total + section + digit)
+
+    normalized = re.sub(r"[〇零一二三四五六七八九十百千]+", normalize_japanese_number, normalized)
     return "".join(character for character in normalized if character.isalnum())
 
 
@@ -145,6 +166,10 @@ def main(page: ft.Page):
             "brand_mark": "日",
             "language_label": "言語",
             "language_tooltip": "表示言語",
+            "text_size_label": "文字サイズ",
+            "text_size_small": "小",
+            "text_size_medium": "標準",
+            "text_size_large": "大",
             "date_format": "%Y年%m月%d日",
             "address_title": "住所",
             "address_description": "富山県内の住所を入力してください。",
@@ -153,6 +178,16 @@ def main(page: ft.Page):
             "municipality_hint": "市町村を選択",
             "street_address_label": "町名・番地",
             "street_address_hint": "例：新桜町7-38",
+            "packing_title": "避難の持ち物リスト",
+            "packing_items": [
+                "飲料水",
+                "非常食",
+                "常備薬・救急用品",
+                "懐中電灯・ラジオ",
+                "携帯電話・充電器",
+                "身分証・現金",
+                "マスク・防寒用品",
+            ],
             "privacy_note": "入力住所はこのアプリには保存されず、座標検索のため国土地理院の住所検索サービスに送信されます。",
             "search_button": "最寄りの避難所を検索",
             "searching": "検索中…",
@@ -171,6 +206,10 @@ def main(page: ft.Page):
             "brand_mark": "D",
             "language_label": "Language",
             "language_tooltip": "Display language",
+            "text_size_label": "Text size",
+            "text_size_small": "Small",
+            "text_size_medium": "Medium",
+            "text_size_large": "Large",
             "date_format": "%b %d, %Y",
             "address_title": "Address",
             "address_description": "Enter an address in Toyama Prefecture.",
@@ -179,6 +218,16 @@ def main(page: ft.Page):
             "municipality_hint": "Select a municipality",
             "street_address_label": "Street address",
             "street_address_hint": "e.g. 7-38 Shinsakuramachi",
+            "packing_title": "Evacuation packing list",
+            "packing_items": [
+                "Drinking water",
+                "Emergency food",
+                "Medicine and first-aid supplies",
+                "Flashlight and radio",
+                "Mobile phone and charger",
+                "ID and cash",
+                "Masks and warm clothing",
+            ],
             "privacy_note": "Your address is not saved by this app. It is sent to the Geospatial Information Authority of Japan address search service to find its coordinates.",
             "search_button": "Find nearby shelters",
             "searching": "Searching…",
@@ -197,6 +246,10 @@ def main(page: ft.Page):
             "brand_mark": "记",
             "language_label": "语言",
             "language_tooltip": "选择语言",
+            "text_size_label": "文字大小",
+            "text_size_small": "小",
+            "text_size_medium": "标准",
+            "text_size_large": "大",
             "date_format": "%Y年%m月%d日",
             "address_title": "地址",
             "address_description": "请输入富山县内的地址。",
@@ -205,6 +258,16 @@ def main(page: ft.Page):
             "municipality_hint": "请选择市町村",
             "street_address_label": "町名、门牌号",
             "street_address_hint": "例如：新樱町7-38",
+            "packing_title": "避难携带物品清单",
+            "packing_items": [
+                "饮用水",
+                "应急食品",
+                "常备药品和急救用品",
+                "手电筒和收音机",
+                "手机和充电器",
+                "身份证件和现金",
+                "口罩和保暖用品",
+            ],
             "privacy_note": "本应用不会保存您输入的地址；为查询坐标，地址会发送至日本国土地理院的地址搜索服务。",
             "search_button": "查找最近的避难所",
             "searching": "搜索中…",
@@ -221,12 +284,94 @@ def main(page: ft.Page):
     }
 
     def tr(key, **values):
-        return translations[current_language][key].format(**values)
+        value = translations[current_language][key]
+        return value.format(**values) if isinstance(value, str) else value
 
     def formatted_date():
         return date.today().strftime(tr("date_format"))
 
     page.title = tr("app_title")
+    text_scale = 1.0
+    base_text_sizes = {}
+
+    def scaled_font_size(control, property_name, default_size):
+        key = (id(control), property_name)
+        if key not in base_text_sizes:
+            value = getattr(control, property_name, None)
+            if isinstance(value, ft.TextStyle):
+                value = value.size
+            base_text_sizes[key] = value or default_size
+        return round(base_text_sizes[key] * text_scale)
+
+    def apply_text_scale(control=None):
+        if control is None:
+            control = app_container
+        if isinstance(control, ft.Text):
+            key = (id(control), "size")
+            if key not in base_text_sizes:
+                base_text_sizes[key] = control.size
+            base_size = base_text_sizes[key]
+            control.size = round(base_size * text_scale) if base_size is not None else None
+        elif isinstance(control, ft.TextField):
+            control.text_size = scaled_font_size(control, "text_size", 16)
+            control.label_style = ft.TextStyle(
+                size=scaled_font_size(control, "label_style", 12)
+            )
+            control.hint_style = ft.TextStyle(
+                size=scaled_font_size(control, "hint_style", 16)
+            )
+            control.helper_style = ft.TextStyle(
+                size=scaled_font_size(control, "helper_style", 12)
+            )
+            control.error_style = ft.TextStyle(
+                size=scaled_font_size(control, "error_style", 12)
+            )
+        elif isinstance(control, ft.Dropdown):
+            control.text_size = scaled_font_size(control, "text_size", 16)
+            control.text_style = ft.TextStyle(size=control.text_size)
+            control.label_style = ft.TextStyle(
+                size=scaled_font_size(control, "label_style", 12)
+            )
+            control.hint_style = ft.TextStyle(
+                size=scaled_font_size(control, "hint_style", 16)
+            )
+            control.helper_style = ft.TextStyle(
+                size=scaled_font_size(control, "helper_style", 12)
+            )
+            control.error_style = ft.TextStyle(
+                size=scaled_font_size(control, "error_style", 12)
+            )
+        elif isinstance(control, ft.Checkbox):
+            control.label_style = ft.TextStyle(
+                size=scaled_font_size(control, "label_style", 14)
+            )
+        elif isinstance(control, (ft.FilledButton, ft.TextButton)):
+            key = (id(control), "button_text")
+            if key not in base_text_sizes:
+                base_text_sizes[key] = 14
+            control.style = ft.ButtonStyle(
+                text_style=ft.TextStyle(
+                    size=round(base_text_sizes[key] * text_scale)
+                )
+            )
+
+        content = getattr(control, "content", None)
+        if content is not None:
+            apply_text_scale(content)
+        for child in getattr(control, "controls", []) or []:
+            apply_text_scale(child)
+
+    def set_text_size(_event):
+        nonlocal text_scale
+        text_scale = {
+            "small": 0.85,
+            "medium": 1.0,
+            "large": 1.20,
+        }[text_size_selector.value or "medium"]
+        apply_text_scale(app_container)
+        if results_section.visible:
+            render_results(found_shelters)
+        page.update()
 
     def set_language(_event):
         nonlocal current_language
@@ -236,12 +381,19 @@ def main(page: ft.Page):
         today.value = formatted_date()
         language_selector.label = tr("language_label")
         language_selector.tooltip = tr("language_tooltip")
+        text_size_selector.label = tr("text_size_label")
+        text_size_selector.options[0].text = tr("text_size_small")
+        text_size_selector.options[1].text = tr("text_size_medium")
+        text_size_selector.options[2].text = tr("text_size_large")
         address_title.value = tr("address_title")
         address_description.value = tr("address_description")
         municipality_selector.label = tr("municipality_label")
         municipality_selector.hint_text = tr("municipality_hint")
         street_address.label = tr("street_address_label")
         street_address.hint_text = tr("street_address_hint")
+        packing_title.value = tr("packing_title")
+        for checkbox, label in zip(packing_checkboxes, tr("packing_items")):
+            checkbox.label = label
         privacy_note.value = tr("privacy_note")
         search_button.content = tr("search_button")
         if results_section.visible:
@@ -266,6 +418,17 @@ def main(page: ft.Page):
         width=132,
         tooltip=tr("language_tooltip"),
     )
+    text_size_selector = ft.Dropdown(
+        label=tr("text_size_label"),
+        value="medium",
+        options=[
+            ft.DropdownOption(key="small", text=tr("text_size_small")),
+            ft.DropdownOption(key="medium", text=tr("text_size_medium")),
+            ft.DropdownOption(key="large", text=tr("text_size_large")),
+        ],
+        on_select=set_text_size,
+        width=112,
+    )
     header = ft.Row(
         [
             ft.Row(
@@ -282,9 +445,27 @@ def main(page: ft.Page):
                 ],
                 spacing=10,
             ),
-            ft.Row([today, language_selector], spacing=8),
+            ft.Row([today, text_size_selector, language_selector], spacing=8),
         ],
         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+    )
+
+    packing_title = ft.Text(tr("packing_title"), size=20, weight=ft.FontWeight.BOLD)
+    packing_checkboxes = [
+        ft.Checkbox(label=item)
+        for item in tr("packing_items")
+    ]
+    packing_section = ft.Container(
+        content=ft.Column(
+            [
+                packing_title,
+                ft.Column(packing_checkboxes, spacing=2),
+            ],
+            spacing=8,
+        ),
+        padding=16,
+        bgcolor="white",
+        border_radius=12,
     )
 
     address_title = ft.Text(tr("address_title"), size=20, weight=ft.FontWeight.BOLD)
@@ -344,11 +525,13 @@ def main(page: ft.Page):
             ft.TextButton(content=tr("source_label"), url=GSI_SHELTER_SOURCE),
             ft.TextButton(content=tr("new_search_button"), on_click=show_address_form),
         ]
+        apply_text_scale(results_section)
 
     found_shelters = []
 
     def show_address_form(_event=None):
         results_section.visible = False
+        packing_section.visible = True
         address_section.visible = True
         municipality_selector.value = None
         street_address.value = ""
@@ -381,6 +564,7 @@ def main(page: ft.Page):
         except ValueError as error:
             form_error.value = f"{tr('search_failed')} ({error})"
         else:
+            packing_section.visible = False
             address_section.visible = False
             render_results(found_shelters)
             results_section.visible = True
@@ -414,11 +598,12 @@ def main(page: ft.Page):
     search_button = address_section.controls[-1]
     results_section = ft.Column(visible=False, spacing=16)
     content = ft.Column(
-        [header, address_section, results_section],
+        [header, packing_section, address_section, results_section],
         width=700,
         spacing=28,
     )
     app_container = ft.Container(content=content, width=700, padding=ft.Padding.only(top=18, bottom=32))
+    apply_text_scale(app_container)
 
     def resize_page(event):
         viewport_width = page.width or 748
